@@ -78,7 +78,7 @@ import java.math.BigDecimal
 private val BLUE = Color(0xFF1E88E5)
 private val DARKBLUE = Color(0xFF1565C0)
 private val GREYBG = Color(0xFFEFEFEF)
-private val LINE_NUM = Color(0xFFC62828)
+private val LINE_NUM = Color(0xFF9E9E9E)
 private val FOCUS_BG = Color(0xFFF0F7FF)
 
 // ----------------- ViewModel (mantiq + saqlash) -----------------
@@ -421,11 +421,11 @@ data class K(val label: String, val action: String)
 @Composable
 fun Keypad(vm: CalcViewModel) {
     val rows = listOf(
-        listOf(K("7", "7"), K("8", "8"), K("9", "9"), K("⌫", "BKSP"), K("C", "CLR")),
+        listOf(K("7", "7"), K("8", "8"), K("9", "9"), K("⌫", "BKSP"), K("C", "CLRALL")),
         listOf(K("4", "4"), K("5", "5"), K("6", "6"), K("(", "("), K(")", ")")),
         listOf(K("1", "1"), K("2", "2"), K("3", "3"), K("×", " * "), K("÷", " / ")),
         listOf(K("0", "0"), K("00", "00"), K(".", "."), K("+", " + "), K("−", " - ")),
-        listOf(K("◀", "LEFT"), K("▶", "RIGHT"), K("mod", " mod "), K("Ans", "Ans"), K("↵", "ENTER"))
+        listOf(K("◀", "LEFT"), K("▶", "RIGHT"), K("%", "%"), K("CE", "CLRLINE"), K("↵", "ENTER"))
     )
     Surface(color = Color(0xFFF5F5F5)) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(4.dp)) {
@@ -444,12 +444,14 @@ fun Keypad(vm: CalcViewModel) {
 fun KeyButton(k: K, modifier: Modifier, onClick: () -> Unit) {
     val bg = when (k.action) {
         "ENTER" -> BLUE
-        "CLR", "BKSP" -> Color(0xFFEF9A9A)
+        "CLRALL" -> Color(0xFFEF5350)
+        "CLRLINE", "BKSP" -> Color(0xFFEF9A9A)
         else -> Color.White
     }
     val fg = when (k.action) {
         "ENTER" -> Color.White
-        "CLR", "BKSP" -> Color(0xFFB71C1C)
+        "CLRALL" -> Color.White
+        "CLRLINE", "BKSP" -> Color(0xFFB71C1C)
         else -> Color(0xFF222222)
     }
     Surface(
@@ -467,7 +469,8 @@ fun KeyButton(k: K, modifier: Modifier, onClick: () -> Unit) {
 fun onKey(vm: CalcViewModel, action: String) {
     when (action) {
         "BKSP" -> vm.backspace()
-        "CLR" -> vm.clearLine()
+        "CLRLINE" -> vm.clearLine()
+        "CLRALL" -> vm.clearAll()
         "ENTER" -> vm.newLine()
         "LEFT" -> vm.moveCursor(-1)
         "RIGHT" -> vm.moveCursor(1)
@@ -575,7 +578,9 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 "Qatorma-qator hisoblagich.\n\n" +
                     "Har bir qator alohida hisoblanadi, pastda umumiy yig'indi (Jami) chiqadi. " +
                     "Ma'lumotlar avtomatik saqlanadi — dasturni yopsangiz ham yo'qolmaydi.\n\n" +
-                    "Amallar:  +  −  ×  ÷  mod  ( )  Ans"
+                    "Amallar:  +  −  ×  ÷  %  ( )\n" +
+                    "Foiz misol:  1000 × 5% = 50\n\n" +
+                    "C — hammasini tozalaydi,  CE — shu qatorni,  ⌫ — bitta belgini."
             )
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } }

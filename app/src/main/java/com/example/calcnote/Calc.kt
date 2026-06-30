@@ -66,19 +66,29 @@ private class Parser(
             when {
                 c == '*' || c == '×' || c == '·' -> { pos++; v = v.multiply(factor()) }
                 c == '/' || c == '÷' || c == ':' -> { pos++; v = v.divide(factor(), mc) }
-                c == '%' -> { pos++; v = v.remainder(factor()) }
                 matchWord("mod") -> { v = v.remainder(factor()) }
                 else -> return v
             }
         }
     }
 
-    // son, qavs, unar +/-, Ans
+    // son, qavs, unar +/-, Ans  + postfiks foiz (5% = 0.05)
     private fun factor(): BigDecimal {
+        var v = atom()
+        skip()
+        while (peek() == '%') {
+            pos++
+            v = v.divide(BigDecimal(100), mc)
+            skip()
+        }
+        return v
+    }
+
+    private fun atom(): BigDecimal {
         skip()
         when (peek()) {
-            '+' -> { pos++; return factor() }
-            '-' -> { pos++; return factor().negate() }
+            '+' -> { pos++; return atom() }
+            '-' -> { pos++; return atom().negate() }
             '(' -> {
                 pos++
                 val v = expr()
