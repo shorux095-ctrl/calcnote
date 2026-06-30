@@ -7,8 +7,11 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
@@ -52,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,8 +74,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.math.BigDecimal
 
@@ -100,7 +110,7 @@ class CalcViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         currentNote = prefs.getString("current", "Hisob 1") ?: "Hisob 1"
-        loadNote(currentNote)
+        loadNote(currentNote, flush = false)
     }
 
     // ---- snapshot / undo ----
@@ -168,13 +178,9 @@ class CalcViewModel(app: Application) : AndroidViewModel(app) {
 
     fun newLine() {
         pushUndo()
-        val tfv = lines[focused]
-        val p = tfv.selection.start.coerceIn(0, tfv.text.length)
-        val before = tfv.text.substring(0, p)
-        val after = tfv.text.substring(p)
-        lines[focused] = tfv.copy(text = before, selection = TextRange(before.length))
-        lines.add(focused + 1, TextFieldValue(after, selection = TextRange(0)))
-        focused += 1
+        // yangi bo'sh qator ENG TEPAGA qo'shiladi (eng oxirgi yozuv yuqorida turadi)
+        lines.add(0, TextFieldValue("", selection = TextRange(0)))
+        focused = 0
         save()
     }
 
@@ -215,20 +221,39 @@ class CalcViewModel(app: Application) : AndroidViewModel(app) {
         return sum
     }
 
-    // ---- fayl saqlash (ma'lumot yo'qolmaydi) ----
+    // ---- fayl saqlash (ma'lumot yo'qolmaydi, tez/fon-rejimda) ----
     private fun sanitize(name: String) =
         name.replace(Regex("[^a-zA-Z0-9 _-]"), "_").trim().ifBlank { "Hisob" }
 
     private fun fileFor(name: String) = File(notesDir, sanitize(name) + ".txt")
 
-    fun save() {
+    private var saveJob: Job? = null
+
+    // diskka haqiqiy yozish
+    private fun writeToDisk() {
         try {
             fileFor(currentNote).writeText(lines.joinToString("\n") { it.text })
             prefs.edit().putString("current", currentNote).apply()
         } catch (_: Exception) {}
     }
 
-    fun loadNote(name: String) {
+    // har bosishda chaqiriladi: kechiktirib, FON oqimida yozadi -> UI qotmaydi
+    fun save() {
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch {
+            delay(300)
+            withContext(Dispatchers.IO) { writeToDisk() }
+        }
+    }
+
+    // darhol yozish (fayl almashganda / dastur to'xtaganda)
+    fun flushSave() {
+        saveJob?.cancel()
+        writeToDisk()
+    }
+
+    fun loadNote(name: String, flush: Boolean = true) {
+        if (flush) flushSave()      // oldingi faylni saqlab qo'yamiz
         currentNote = name
         val f = fileFor(name)
         val content = if (f.exists()) f.readText() else ""
@@ -241,32 +266,44 @@ class CalcViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("current", currentNote).apply()
     }
 
+    private fun rawFileNames(): List<String> =
+        (notesDir.listFiles { f -> f.extension == "txt" }?.toList() ?: emptyList())
+            .sortedByDescending { it.lastModified() }
+            .map { it.nameWithoutExtension }
+
     fun listNotes(): List<String> {
-        val files = notesDir.listFiles { f -> f.extension == "txt" }?.toList() ?: emptyList()
-        val names = files.sortedByDescending { it.lastModified() }.map { it.nameWithoutExtension }
-        return if (names.isEmpty()) listOf(currentNote) else names
+        val names = rawFileNames()
+        return if (currentNote in names) names else listOf(currentNote) + names
     }
 
+    // faylni ajratib olish uchun birinchi (bo'sh bo'lmagan) qatori
+    fun preview(name: String): String = try {
+        val f = fileFor(name)
+        if (f.exists()) (f.readLines().firstOrNull { it.isNotBlank() }?.take(34) ?: "") else ""
+    } catch (_: Exception) { "" }
+
     fun newNote() {
-        save()
+        flushSave()                 // oldingi faylni saqlab qo'yamiz
         var n = 1
         var name: String
         do { name = "Hisob $n"; n++ } while (fileFor(name).exists())
         currentNote = name
         lines.clear(); lines.add(TextFieldValue("")); focused = 0
         undoStack.clear(); redoStack.clear()
-        save()
+        writeToDisk()               // yangi bo'sh faylni darhol yaratamiz
     }
 
     fun deleteNote(name: String) {
+        if (name == currentNote) saveJob?.cancel()   // o'chirilayotgan fayl qayta yozilmasin
         try { fileFor(name).delete() } catch (_: Exception) {}
         if (name == currentNote) {
-            val remaining = listNotes().filter { it != name }
-            if (remaining.isNotEmpty()) loadNote(remaining.first()) else newNote()
+            val remaining = rawFileNames().filter { it != name }
+            if (remaining.isNotEmpty()) loadNote(remaining.first(), flush = false) else newNote()
         }
     }
 
     fun renameCurrent(newName: String) {
+        flushSave()                 // joriy mazmunni eski faylga yozib qo'yamiz
         val old = fileFor(currentNote)
         val nw = fileFor(newName)
         try {
@@ -281,13 +318,20 @@ class CalcViewModel(app: Application) : AndroidViewModel(app) {
 
 // ----------------- Activity -----------------
 class MainActivity : ComponentActivity() {
+    private val vm: CalcViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = BLUE)) {
-                CalcApp()
+                CalcApp(vm)
             }
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        vm.flushSave()   // dastur orqaga ketsa/yopilsa — darhol saqlaymiz
     }
 }
 
@@ -306,7 +350,7 @@ fun CalcApp(vm: CalcViewModel = viewModel()) {
             ModalDrawerSheet {
                 DrawerContent(
                     onNew = { vm.newNote(); scope.launch { drawerState.close() } },
-                    onSave = { vm.save(); toast(context, "Saqlandi"); scope.launch { drawerState.close() } },
+                    onSave = { vm.flushSave(); toast(context, "Saqlandi"); scope.launch { drawerState.close() } },
                     onFiles = { showFiles = true; scope.launch { drawerState.close() } },
                     onRename = { showRename = true; scope.launch { drawerState.close() } },
                     onShare = { shareText(context, vm); scope.launch { drawerState.close() } },
@@ -337,6 +381,12 @@ fun CalcScreen(vm: CalcViewModel, onMenu: () -> Unit) {
     }
     val total = results.filterNotNull().fold(BigDecimal.ZERO) { a, b -> a.add(b) }
 
+    val listState = rememberLazyListState()
+    // yangi qator (yoki tahrir) tepaga qo'shilganda — avtomatik tepaga ko'taramiz
+    LaunchedEffect(vm.lines.size) {
+        if (vm.focused == 0) listState.scrollToItem(0)
+    }
+
     Column(Modifier.fillMaxSize().background(Color.White)) {
         // Yuqori panel
         Surface(color = BLUE) {
@@ -358,7 +408,10 @@ fun CalcScreen(vm: CalcViewModel, onMenu: () -> Unit) {
         }
 
         // Qatorlar
-        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        ) {
             itemsIndexed(vm.lines) { i, _ ->
                 CalcLine(vm, i, results.getOrNull(i))
             }
@@ -391,25 +444,25 @@ fun CalcLine(vm: CalcViewModel, index: Int, result: BigDecimal?) {
         Modifier.fillMaxWidth()
             .clickable { vm.focusLine(index) }
             .background(if (isFocused) FOCUS_BG else Color.White)
-            .padding(horizontal = 8.dp, vertical = 9.dp),
+            .padding(horizontal = 8.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            "${index + 1}", color = LINE_NUM, fontSize = 16.sp,
-            modifier = Modifier.width(28.dp), textAlign = TextAlign.End
+            "${index + 1}", color = LINE_NUM, fontSize = 15.sp,
+            modifier = Modifier.width(26.dp), textAlign = TextAlign.End
         )
         Spacer(Modifier.width(10.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(text.take(cur), fontSize = 19.sp, color = Color.Black, maxLines = 1)
+            Text(text.take(cur), fontSize = 24.sp, color = Color.Black, maxLines = 1)
             if (isFocused) {
-                Box(Modifier.width(2.dp).height(24.dp).background(BLUE))
+                Box(Modifier.width(2.dp).height(30.dp).background(BLUE))
             }
-            Text(text.substring(cur), fontSize = 19.sp, color = Color.Black, maxLines = 1)
+            Text(text.substring(cur), fontSize = 24.sp, color = Color.Black, maxLines = 1)
         }
         Spacer(Modifier.width(8.dp))
         Text(
-            result?.let { formatBD(it) } ?: "", color = Color(0xFF222222),
-            fontSize = 19.sp, fontWeight = FontWeight.Medium,
+            result?.let { formatBD(it) } ?: "", color = Color(0xFF1565C0),
+            fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.widthIn(min = 60.dp), textAlign = TextAlign.End
         )
     }
@@ -455,13 +508,13 @@ fun KeyButton(k: K, modifier: Modifier, onClick: () -> Unit) {
         else -> Color(0xFF222222)
     }
     Surface(
-        modifier = modifier.padding(3.dp).height(52.dp).clickable { onClick() },
+        modifier = modifier.padding(3.dp).height(56.dp).clickable { onClick() },
         color = bg,
         shape = RoundedCornerShape(8.dp),
         shadowElevation = 1.dp
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(k.label, fontSize = 20.sp, color = fg, fontWeight = FontWeight.Medium)
+            Text(k.label, fontSize = 22.sp, color = fg, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -520,20 +573,34 @@ fun DrawerItem(icon: ImageVector, label: String, onClick: () -> Unit) {
 @Composable
 fun FilesDialog(vm: CalcViewModel, onDismiss: () -> Unit) {
     val notes = remember { vm.listNotes() }
+    val current = vm.currentNote
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Fayllar") },
+        title = { Text("Saqlangan fayllar (${notes.size})") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 notes.forEach { name ->
+                    val prev = vm.preview(name)
+                    val isCur = name == current
                     Row(
-                        Modifier.fillMaxWidth().clickable { vm.loadNote(name); onDismiss() }
-                            .padding(vertical = 6.dp),
+                        Modifier.fillMaxWidth()
+                            .clickable { vm.loadNote(name); onDismiss() }
+                            .background(if (isCur) FOCUS_BG else Color.Transparent)
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Filled.Description, contentDescription = null, tint = BLUE)
                         Spacer(Modifier.width(10.dp))
-                        Text(name, modifier = Modifier.weight(1f), fontSize = 16.sp)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (isCur) "$name  •  hozir ochiq" else name,
+                                fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
+                            )
+                            Text(
+                                if (prev.isBlank()) "(bo'sh)" else prev,
+                                fontSize = 13.sp, color = Color(0xFF888888), maxLines = 1
+                            )
+                        }
                         IconButton(onClick = { vm.deleteNote(name); onDismiss() }) {
                             Icon(Icons.Filled.Delete, contentDescription = "O'chirish", tint = Color(0xFFE57373))
                         }
