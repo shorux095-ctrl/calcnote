@@ -8,8 +8,11 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -65,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
@@ -428,8 +432,9 @@ fun CalcScreen(vm: CalcViewModel, onMenu: () -> Unit) {
             }
         }
 
-        // Klaviatura
-        Keypad(vm)
+        // Klaviatura — barqaror callback (har bosishda qayta chizilmaydi -> siliq/tez)
+        val keyHandler: (String) -> Unit = remember(vm) { { a -> onKey(vm, a) } }
+        Keypad(keyHandler)
     }
 }
 
@@ -471,21 +476,30 @@ fun CalcLine(vm: CalcViewModel, index: Int, result: BigDecimal?) {
 // ----------------- Klaviatura -----------------
 data class K(val label: String, val action: String)
 
+// tugma turi -> shrift o'lchami
+private fun keyFont(action: String): Int = when {
+    action.length == 1 && action[0].isDigit() -> 27   // raqamlar KATTA
+    action == "00" || action == "." -> 27
+    action == " + " || action == " - " || action == " * " || action == " / " || action == "%" -> 18  // amallar kichik
+    else -> 20                                          // ⌫ C CE ↵ ◀ ▶ ( )
+}
+
 @Composable
-fun Keypad(vm: CalcViewModel) {
+fun Keypad(onKey: (String) -> Unit) {
     val rows = listOf(
-        listOf(K("7", "7"), K("8", "8"), K("9", "9"), K("⌫", "BKSP"), K("C", "CLRALL")),
-        listOf(K("4", "4"), K("5", "5"), K("6", "6"), K("(", "("), K(")", ")")),
-        listOf(K("1", "1"), K("2", "2"), K("3", "3"), K("×", " * "), K("÷", " / ")),
-        listOf(K("0", "0"), K("00", "00"), K(".", "."), K("+", " + "), K("−", " - ")),
-        listOf(K("◀", "LEFT"), K("▶", "RIGHT"), K("%", "%"), K("CE", "CLRLINE"), K("↵", "ENTER"))
+        // qizil boshqaruv tugmalari ENG TEPADA
+        listOf(K("◀", "LEFT"), K("▶", "RIGHT"), K("⌫", "BKSP"), K("CE", "CLRLINE"), K("C", "CLRALL")),
+        listOf(K("7", "7"), K("8", "8"), K("9", "9"), K("(", "("), K(")", ")")),
+        listOf(K("4", "4"), K("5", "5"), K("6", "6"), K("×", " * "), K("÷", " / ")),
+        listOf(K("1", "1"), K("2", "2"), K("3", "3"), K("+", " + "), K("−", " - ")),
+        listOf(K("0", "0"), K("00", "00"), K(".", "."), K("%", "%"), K("↵", "ENTER"))
     )
     Surface(color = Color(0xFFF5F5F5)) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(4.dp)) {
             rows.forEach { row ->
                 Row(Modifier.fillMaxWidth()) {
                     row.forEach { k ->
-                        KeyButton(k, Modifier.weight(1f)) { onKey(vm, k.action) }
+                        KeyButton(k, Modifier.weight(1f)) { onKey(k.action) }
                     }
                 }
             }
@@ -495,12 +509,24 @@ fun Keypad(vm: CalcViewModel) {
 
 @Composable
 fun KeyButton(k: K, modifier: Modifier, onClick: () -> Unit) {
-    val bg = when (k.action) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    // bosilganda kattalashadi
+    val scale by animateFloatAsState(if (pressed) 1.10f else 1f, label = "scale")
+
+    val baseBg = when (k.action) {
         "ENTER" -> BLUE
         "CLRALL" -> Color(0xFFEF5350)
         "CLRLINE", "BKSP" -> Color(0xFFEF9A9A)
         else -> Color.White
     }
+    // bosilganda rang biroz to'qlashadi
+    val bg = if (pressed) when (k.action) {
+        "ENTER" -> Color(0xFF1669BC)
+        "CLRALL" -> Color(0xFFD32F2F)
+        "CLRLINE", "BKSP" -> Color(0xFFE57373)
+        else -> Color(0xFFE3F2FD)
+    } else baseBg
     val fg = when (k.action) {
         "ENTER" -> Color.White
         "CLRALL" -> Color.White
@@ -508,13 +534,18 @@ fun KeyButton(k: K, modifier: Modifier, onClick: () -> Unit) {
         else -> Color(0xFF222222)
     }
     Surface(
-        modifier = modifier.padding(3.dp).height(56.dp).clickable { onClick() },
+        onClick = onClick,
+        interactionSource = interaction,
+        modifier = modifier
+            .padding(3.dp)
+            .height(56.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale },
         color = bg,
-        shape = RoundedCornerShape(8.dp),
-        shadowElevation = 1.dp
+        shape = RoundedCornerShape(9.dp),
+        shadowElevation = if (pressed) 5.dp else 1.dp
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(k.label, fontSize = 22.sp, color = fg, fontWeight = FontWeight.Medium)
+            Text(k.label, fontSize = keyFont(k.action).sp, color = fg, fontWeight = FontWeight.Medium)
         }
     }
 }
